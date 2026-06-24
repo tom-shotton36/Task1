@@ -219,3 +219,6 @@ __marimo__/
 
 # dont be sharing secrets
 client_secrets.json
+
+client_secret_21745370956-01o6t9q0va2sanac55ecm3ua47o36qld.apps.googleusercontent.com.json
+poetry.lock
