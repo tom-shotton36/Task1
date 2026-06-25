@@ -49,9 +49,6 @@ class YouTubeConnector:
         self.youtube_analytics = googleapiclient.discovery.build("youtubeAnalytics", "v2", credentials=self.credentials)
 
     def _authenticate(self):
-        # Definitely needs changing here - bad for prod.
-        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-
         api_service_name = "youtube"
         api_version = "v3"
 
@@ -59,16 +56,8 @@ class YouTubeConnector:
         flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
             self.client_secrets_path, scopes)
         credentials = flow.run_local_server(port=0)
-        youtube = googleapiclient.discovery.build(
-            api_service_name, api_version, credentials=credentials)
-
-        request = youtube.channels().list(
-            part="snippet,contentDetails,statistics",
-            mine=True
-        )
-        response = request.execute()
-
-        print(response)
+        
+        return cred
 
     def _save_credentials(self, credentials: Credentials) -> None:
         with open(self.token_path, "w", encoding="utf-8") as handle:
