@@ -39,14 +39,16 @@ class YouTubeConnector:
         os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
         load_dotenv()
 
-        self.client_secrets_path = client_secrets_path
+        self.client_secrets_path = client_secrets_path or os.getenv("CLIENT_SECRET_PATH")
         if not self.client_secrets_path:
             raise ValueError("CLIENT_SECRET_PATH must point to a Google client secrets JSON file")
 
-        self.token_path = token_path
+        self.token_path = token_path or os.getenv("TOKEN_PATH")
         self.credentials = self._authenticate()
         self.youtube = googleapiclient.discovery.build("youtube", "v3", credentials=self.credentials)
         self.youtube_analytics = googleapiclient.discovery.build("youtubeAnalytics", "v2", credentials=self.credentials)
+
+        self._save_credentials(self.credentials)
 
     def _authenticate(self):
         api_service_name = "youtube"
@@ -57,7 +59,7 @@ class YouTubeConnector:
             self.client_secrets_path, scopes)
         credentials = flow.run_local_server(port=0)
         
-        return cred
+        return credentials 
 
     def _save_credentials(self, credentials: Credentials) -> None:
         with open(self.token_path, "w", encoding="utf-8") as handle:
@@ -89,8 +91,8 @@ class YouTubeConnector:
         return items[0]
 
     def get_channel_statistics(self) -> dict[str, Any]:
-        channel_item = self._get_channel_item()
-        return self._normalize_channel_payload({"items": [channel_item]})
+        return self._get_channel_item()
+
 
     @staticmethod
     def _rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
