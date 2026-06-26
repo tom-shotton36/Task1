@@ -18,7 +18,6 @@ load_dotenv()
 DATA_API_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 ANALYTICS_SCOPES = ["https://www.googleapis.com/auth/yt-analytics.readonly"]
 ALL_SCOPES = DATA_API_SCOPES + ANALYTICS_SCOPES
-scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
 
 class YouTubeApiError(Exception):
@@ -51,21 +50,44 @@ class YouTubeConnector:
         self._save_credentials(self.credentials)
 
     def _authenticate(self):
+        """
+        Authenticate both APIs and return the credentials. If a token file exists, we load to avoid re-auth, 
+        and if it is expired we refresh it.
+        """
         api_service_name = "youtube"
         api_version = "v3"
+        credentials = None
 
-        # Get credentials and create an API client
-        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
-            self.client_secrets_path, scopes)
-        credentials = flow.run_local_server(port=0)
+        if self.token_path and os.path.exists(self.token_path):
+            with open(self.token_path, "r", encoding="utf-8") as handle:
+                token_data = json.load(handle)
+                credentials = Credentials.from_authorized_user_info(token_data, ALL_SCOPES)
+        if credentials and credentials.expired and credentials.refresh_token:
+            try:
+                credentials.refresh(Request())
+                self._save_credentials(credentials)
+            except Exception as exc:
+                raise TokenRefreshError(f"Token refresh failed: {exc}") from exc
+        if not credentials or not credentials.valid:
+            # Get credentials and create an API client
+            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
+                self.client_secrets_path, ALL_SCOPES)
+            credentials = flow.run_local_server(port=0)
+            self._save_credentials(credentials)
         
         return credentials 
 
     def _save_credentials(self, credentials: Credentials) -> None:
+        """
+        Save the credentials to the token path.
+        """
         with open(self.token_path, "w", encoding="utf-8") as handle:
             json.dump(json.loads(credentials.to_json()), handle, indent=2)
 
     def _execute_with_retry(self, request: Any) -> dict[str, Any]:
+        """
+        Execute a YouTube API request with retry logic for token refresh and quota errors.
+        """
         try:
             return request.execute()
         except googleapiclient.errors.HttpError as exc:
@@ -91,19 +113,82 @@ class YouTubeConnector:
         return items[0]
 
     def get_channel_statistics(self) -> dict[str, Any]:
-        return self._get_channel_item()
+        """
+        Returns a dictionary with the basic statistics for the authenticated user's channel.
+        """
+        channel_item = self._get_channel_item()
+        stats = channel_item.get("statistics", {})
+        # make dataframe, obviously just a single row
+        channel = {
+            "view_count": int(stats.get("viewCount", 0)),
+            "subscriber_count": int(stats.get("subscriberCount", 0)),
+            "video_count": int(stats.get("videoCount", 0)),
+        }
 
+        return pd.DataFrame(channel, index=[0])
+    
+    def get_recent_video_stats(self, max_results: int = 5):
+        """
+        Simple function to return the basic stats for the most recent videos on a channel.
+        """
+        channel_item = self._get_channel_item()
+        uploads_playlist_id = (
+            channel_item["contentDetails"]["relatedPlaylists"]["uploads"]
+        )
 
-    @staticmethod
-    def _rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
-        if not rows:
-            return pd.DataFrame()
+        # Get recent video IDs
+        request = self.youtube.playlistItems().list(
+            part="snippet",
+            playlistId=uploads_playlist_id,
+            maxResults=max_results,
+        )
+        response = self._execute_with_retry(request)
+        video_ids = [
+            item["snippet"]["resourceId"]["videoId"]
+            for item in response.get("items", [])
+        ]
+        request = self.youtube.videos().list(
+            part="snippet,statistics,contentDetails",
+            id=",".join(video_ids),
+        )
+        response = self._execute_with_retry(request)
+        rows = []
+
+        # before I was going to build out a Dataframe-iser to make this more generic, but its not a big enough class. 
+        for item in response.get("items", []):
+            stats = item.get("statistics", {})
+            rows.append({
+                "view_count": int(stats.get("viewCount", 0)),
+                "like_count": int(stats.get("likeCount", 0)),
+                "dislike_count": int(stats.get("dislikeCount", 0)),
+                "comment_count": int(stats.get("commentCount", 0)),
+            })
+
+        return pd.DataFrame(rows)
+    
+    def get_timeseries_data(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Returns info about a channels performance over a given time range. Could be used to plot a graph of performance over time.
+        """
+        request = self.youtube_analytics.reports().query(
+            ids="channel==MINE",
+            startDate=start_date,
+            endDate=end_date,
+            metrics= 'estimatedMinutesWatched,views,likes,subscribersGained',
+            dimensions='day',
+            sort='day'
+        )
+
+        response = self._execute_with_retry(request)
+        rows = response.get("rows", [])
         return pd.DataFrame(rows)
 
 
 def main() -> None:
     connector = YouTubeConnector()
     print(connector.get_channel_statistics())
+    print(connector.get_timeseries_data("2026-06-20", "2026-06-28"))
+    print(connector.get_recent_video_stats(max_results=5))
 
 if __name__ == "__main__":
     main()
