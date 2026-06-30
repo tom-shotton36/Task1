@@ -219,5 +219,6 @@ __marimo__/
 
 # dont be sharing secrets
 client_secrets*.json
+client_secret*.json
 poetry.lock
 token.json
